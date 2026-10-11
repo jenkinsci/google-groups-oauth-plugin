@@ -21,6 +21,8 @@ import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
  * Resolves the user's <b>direct</b> Google Group memberships with the user's own OAuth access
@@ -33,10 +35,11 @@ import java.util.regex.Pattern;
  *       family requires premium Workspace/Cloud Identity editions). Groups used for Jenkins
  *       RBAC must be flat.</li>
  *   <li><b>Silent filtering</b> — groups whose memberships the caller cannot view are silently
- *       omitted by Google. Mitigated operationally by login-time authority logging and the
- *       whoami page.</li>
+ *       omitted by Google. Mitigated operationally by login-time authority logging and
+ *       Jenkins' built-in {@code /whoAmI} page.</li>
  * </ul>
  */
+@Restricted(NoExternalUse.class)
 public class CloudIdentityDirectGroupResolver implements GroupResolver {
 
     private static final Logger LOGGER = Logger.getLogger(CloudIdentityDirectGroupResolver.class.getName());

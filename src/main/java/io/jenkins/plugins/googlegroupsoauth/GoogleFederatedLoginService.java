@@ -5,6 +5,8 @@ import hudson.Extension;
 import hudson.security.FederatedLoginService;
 import hudson.security.FederatedLoginServiceUserProperty;
 import jenkins.model.Jenkins;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
  * Adds the "Sign in with Google" button to the standard Jenkins login page (core's
@@ -16,6 +18,7 @@ import jenkins.model.Jenkins;
  * <p>Only the login-page fragment of the {@link FederatedLoginService} contract is used;
  * the identity-claiming machinery ({@link #getUserPropertyClass()}) is not.
  */
+@Restricted(NoExternalUse.class)
 @Extension
 public class GoogleFederatedLoginService extends FederatedLoginService {
 

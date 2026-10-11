@@ -7,6 +7,7 @@ import com.google.api.client.http.javanet.NetHttpTransport;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
+import hudson.ProxyConfiguration;
 import hudson.Util;
 import hudson.model.Descriptor;
 import hudson.model.User;
@@ -15,10 +16,10 @@ import hudson.security.GroupDetails;
 import hudson.security.HudsonPrivateSecurityRealm;
 import hudson.security.SecurityRealm;
 import hudson.util.FormValidation;
-import hudson.util.ListBoxModel;
 import hudson.util.Secret;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -40,8 +41,9 @@ import jenkins.model.Jenkins;
 import jenkins.model.JenkinsLocationConfiguration;
 import jenkins.security.LastGrantedAuthoritiesProperty;
 import jenkins.security.SecurityListener;
-import jenkins.security.stapler.StaplerDispatchable;
 import org.jenkinsci.Symbol;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.Header;
@@ -125,6 +127,7 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
     @CheckForNull
     private Integer groupAuthorityMaxAgeDays;
 
+    private transient volatile GoogleOAuthService oauthService;
     private transient volatile GroupResolver groupResolver;
     private transient volatile Map<String, CachedGroups> groupCache;
     private transient LongSupplier clock = System::currentTimeMillis;
@@ -263,16 +266,6 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
         };
     }
 
-    /**
-     * {@code /securityRealm/whoami} — debug page for silently-filtered group authorities.
-     * {@link StaplerDispatchable} is required: the return type is a plain object, which
-     * Jenkins' Stapler routing rules would otherwise refuse to dispatch to (HTTP 404).
-     */
-    @StaplerDispatchable
-    public WhoAmIAction getWhoami() {
-        return new WhoAmIAction();
-    }
-
     // ---------------------------------------------------------------- login flow
 
     /**
@@ -295,7 +288,7 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
         session.setAttribute(SESSION_STATE, state);
         session.setAttribute(SESSION_PKCE_VERIFIER, pkceVerifier);
         session.setAttribute(SESSION_FROM, redirectOnFinish);
-        String url = createOAuthService().buildAuthorizationUrl(buildRedirectUri(), state, s256Challenge(pkceVerifier));
+        String url = oauthService().buildAuthorizationUrl(buildRedirectUri(), state, s256Challenge(pkceVerifier));
         return HttpResponses.redirectTo(url);
     }
 
@@ -346,7 +339,7 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
         GoogleTokenResponse tokenResponse;
         GoogleIdToken.Payload payload;
         try {
-            GoogleOAuthService oauth = createOAuthService();
+            GoogleOAuthService oauth = oauthService();
             tokenResponse = oauth.exchangeCode(code, buildRedirectUri(), pkceVerifier);
             payload = oauth.verifyAndGetPayload(tokenResponse);
         } catch (IOException | GeneralSecurityException e) {
@@ -365,6 +358,7 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
             LOGGER.severe(() -> "Refusing Google login for " + userId + ": the Jenkins user record belongs to"
                     + " Google account " + bound.getSubject() + " but this login is account "
                     + userInfo.getSubject() + " (email reassigned?). Delete the Jenkins user to allow it.");
+            fireLoginRefused(userId);
             return HttpResponses.errorWithoutStack(401,
                     "Login refused: this email address belongs to a different Google account than the one"
                             + " previously used in Jenkins. Contact an administrator.");
@@ -376,6 +370,7 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "Refusing login for " + userId
                     + " because group lookup failed and onGroupLookupFailure=FAIL", e);
+            fireLoginRefused(userId);
             return HttpResponses.errorWithoutStack(401,
                     "Login refused: Google Groups could not be resolved. Contact an administrator.");
         }
@@ -451,6 +446,15 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
 
     // ---------------------------------------------------------------- helpers
 
+    /**
+     * Reports a Google login that was authenticated by Google but refused by Jenkins, so audit
+     * listeners (e.g. the Audit Trail plugin) record it like a failed password login.
+     */
+    private static void fireLoginRefused(@NonNull String userId) {
+        SecurityListener.fireFailedToAuthenticate(userId);
+        SecurityListener.fireFailedToLogIn(userId);
+    }
+
     private boolean groupAuthoritiesExpired(@NonNull GoogleAccountProperty google) {
         int maxAgeDays = getGroupAuthorityMaxAgeDays();
         return maxAgeDays > 0
@@ -500,12 +504,18 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
      */
     @NonNull
     String buildRedirectUri() {
-        String url = JenkinsLocationConfiguration.get().getUrl();
-        if (url == null) {
+        String redirectUri = configuredRedirectUri();
+        if (redirectUri == null) {
             throw new IllegalStateException(
                     "Jenkins URL is not configured; it is required to build the OAuth redirect URI");
         }
-        return Util.ensureEndsWith(url, "/") + "securityRealm/finishLogin";
+        return redirectUri;
+    }
+
+    @CheckForNull
+    static String configuredRedirectUri() {
+        String url = JenkinsLocationConfiguration.get().getUrl();
+        return url == null ? null : Util.ensureEndsWith(url, "/") + "securityRealm/finishLogin";
     }
 
     @NonNull
@@ -531,14 +541,35 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
         return path.endsWith("/login") || path.endsWith("/loginError");
     }
 
+    /**
+     * One service per realm instance, so its ID token verifier keeps Google's signing keys cached
+     * between logins instead of downloading them on every login. Reconfiguring the realm creates
+     * a new instance, so the cached service never outlives the settings it was built from.
+     */
+    @NonNull
+    private GoogleOAuthService oauthService() {
+        GoogleOAuthService service = oauthService;
+        if (service == null) {
+            service = createOAuthService();
+            oauthService = service;
+        }
+        return service;
+    }
+
     @NonNull
     GoogleOAuthService createOAuthService() {
         return new GoogleOAuthService(clientId, clientSecret, hostedDomain, createTransport());
     }
 
+    /**
+     * Connects through the HTTP proxy configured in Jenkins (Manage Jenkins &gt; System), if
+     * any. A plain {@link NetHttpTransport} would only honor JVM-wide proxy system properties.
+     */
     @NonNull
-    HttpTransport createTransport() {
-        return new NetHttpTransport();
+    static HttpTransport createTransport() {
+        return new NetHttpTransport.Builder()
+                .setConnectionFactory(url -> (HttpURLConnection) ProxyConfiguration.open(url))
+                .build();
     }
 
     @NonNull
@@ -617,13 +648,11 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
             return Messages.GoogleGroupsSecurityRealm_DisplayName();
         }
 
-        @RequirePOST
-        public FormValidation doCheckClientId(@QueryParameter String value) {
-            Jenkins.get().checkPermission(Jenkins.ADMINISTER);
-            if (Util.fixEmptyAndTrim(value) == null) {
-                return FormValidation.error(Messages.GoogleGroupsSecurityRealm_ClientIdRequired());
-            }
-            return FormValidation.ok();
+        /** For {@code help-clientId.jelly}: the redirect URI to register, or null without a Jenkins URL. */
+        @CheckForNull
+        @Restricted(NoExternalUse.class)
+        public String getRedirectUri() {
+            return configuredRedirectUri();
         }
 
         @RequirePOST
@@ -670,16 +699,6 @@ public class GoogleGroupsSecurityRealm extends AbstractPasswordBasedSecurityReal
                 return FormValidation.warning(Messages.GoogleGroupsSecurityRealm_GroupAuthorityMaxAgeDaysDisabled());
             }
             return FormValidation.ok();
-        }
-
-        /** Fixed list of enum constants: no side effects and nothing that is not in the source code. */
-        @SuppressWarnings({"lgtm[jenkins/csrf]", "lgtm[jenkins/no-permission-check]"})
-        public ListBoxModel doFillOnGroupLookupFailureItems() {
-            ListBoxModel model = new ListBoxModel();
-            for (GroupLookupFailurePolicy policy : GroupLookupFailurePolicy.values()) {
-                model.add(policy.name());
-            }
-            return model;
         }
     }
 }

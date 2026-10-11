@@ -7,11 +7,14 @@ import hudson.model.User;
 import hudson.tasks.Mailer;
 import java.io.IOException;
 import java.util.Locale;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
  * Profile claims extracted from the verified Google ID token, applied to the Jenkins
  * {@link User} record (display name, email property).
  */
+@Restricted(NoExternalUse.class)
 public class GoogleUserInfo {
 
     private final String subject;

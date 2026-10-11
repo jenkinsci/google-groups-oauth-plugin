@@ -8,25 +8,42 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
 import com.google.api.client.googleapis.auth.oauth2.GoogleTokenResponse;
+import com.google.api.client.http.GenericUrl;
 import com.google.api.client.testing.http.MockHttpTransport;
+import edu.umd.cs.findbugs.annotations.NonNull;
+import hudson.ExtensionList;
+import hudson.ProxyConfiguration;
 import hudson.model.User;
 import hudson.tasks.Mailer;
 import hudson.util.FormValidation;
-import hudson.util.ListBoxModel;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import jenkins.model.JenkinsLocationConfiguration;
+import jenkins.security.ApiTokenProperty;
+import jenkins.security.SecurityListener;
 import org.htmlunit.Page;
 import org.htmlunit.WebRequest;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlSelect;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.TestExtension;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -42,6 +59,7 @@ public class GoogleLoginFlowTest {
 
     private static final String EMAIL = "alice@example.com";
     private static final String GROUP = "jenkins-qa@example.com";
+    private static final String HELP = "descriptor/" + GoogleGroupsSecurityRealm.class.getName() + "/help";
 
     private JenkinsRule j;
 
@@ -54,6 +72,7 @@ public class GoogleLoginFlowTest {
     private static class TestRealm extends GoogleGroupsSecurityRealm {
         transient IOException nextExchangeFailure;
         transient String subject = "sub-alice";
+        transient int oauthServicesCreated;
 
         TestRealm() {
             super("client-id", null, "example.com");
@@ -62,6 +81,7 @@ public class GoogleLoginFlowTest {
 
         @Override
         GoogleOAuthService createOAuthService() {
+            oauthServicesCreated++;
             return new GoogleOAuthService("client-id", null, "example.com", new MockHttpTransport()) {
                 @Override
                 GoogleTokenResponse exchangeCode(String code, String redirectUri, String codeVerifier)
@@ -90,6 +110,26 @@ public class GoogleLoginFlowTest {
         }
     }
 
+    /** Records the failed-login events that audit plugins listen to. */
+    @TestExtension
+    public static class FailedLoginRecorder extends SecurityListener {
+        final List<String> events = new CopyOnWriteArrayList<>();
+
+        @Override
+        protected void failedToAuthenticate(@NonNull String username) {
+            events.add("failedToAuthenticate:" + username);
+        }
+
+        @Override
+        protected void failedToLogIn(@NonNull String username) {
+            events.add("failedToLogIn:" + username);
+        }
+    }
+
+    private static List<String> failedLogins() {
+        return ExtensionList.lookupSingleton(FailedLoginRecorder.class).events;
+    }
+
     private JenkinsRule.WebClient rawClient() {
         JenkinsRule.WebClient wc = j.createWebClient();
         wc.getOptions().setRedirectEnabled(false);
@@ -112,6 +152,11 @@ public class GoogleLoginFlowTest {
     private Page finishLogin(JenkinsRule.WebClient wc, String state) throws IOException {
         return get(wc, "securityRealm/finishLogin?code=auth-code&state="
                 + URLEncoder.encode(state, StandardCharsets.UTF_8));
+    }
+
+    /** Jenkins' built-in {@code /whoAmI} as JSON: name, anonymous flag and authorities. */
+    private String whoAmI(JenkinsRule.WebClient wc) throws IOException {
+        return get(wc, "whoAmI/api/json").getWebResponse().getContentAsString();
     }
 
     private static String queryParam(String url, String name) {
@@ -151,8 +196,8 @@ public class GoogleLoginFlowTest {
         assertEquals(302, finish.getWebResponse().getStatusCode());
         assertEquals(j.getURL().toString(), finish.getWebResponse().getResponseHeaderValue("Location"));
 
-        String whoami = get(wc, "securityRealm/whoami/").getWebResponse().getContentAsString();
-        assertTrue(whoami.contains(EMAIL));
+        String whoami = whoAmI(wc);
+        assertTrue(whoami.contains("\"" + EMAIL + "\""));
         assertTrue(whoami.contains(GROUP));
         assertTrue(whoami.contains("authenticated"));
 
@@ -228,8 +273,8 @@ public class GoogleLoginFlowTest {
 
         String state = commenceAndGetState(wc, "");
         assertEquals(401, finishLogin(wc, state).getWebResponse().getStatusCode());
-        assertTrue(get(wc, "securityRealm/whoami/").getWebResponse().getContentAsString()
-                .contains("not logged in"));
+        assertTrue(whoAmI(wc).contains("\"anonymous\":true"));
+        assertEquals(List.of("failedToAuthenticate:" + EMAIL, "failedToLogIn:" + EMAIL), failedLogins());
     }
 
     @Test
@@ -274,12 +319,14 @@ public class GoogleLoginFlowTest {
         JenkinsRule.WebClient wc = rawClient();
         assertEquals(302, finishLogin(wc, commenceAndGetState(wc, "")).getWebResponse().getStatusCode());
         assertEquals("sub-alice", User.getById(EMAIL, false).getProperty(GoogleAccountProperty.class).getSubject());
+        assertEquals(List.of(), failedLogins());
 
         // Same email, different Google account: refused, binding unchanged, no session.
         realm.subject = "sub-someone-else";
         JenkinsRule.WebClient wc2 = rawClient();
         assertEquals(401, finishLogin(wc2, commenceAndGetState(wc2, "")).getWebResponse().getStatusCode());
-        assertTrue(get(wc2, "securityRealm/whoami/").getWebResponse().getContentAsString().contains("not logged in"));
+        assertTrue(whoAmI(wc2).contains("\"anonymous\":true"));
+        assertEquals(List.of("failedToAuthenticate:" + EMAIL, "failedToLogIn:" + EMAIL), failedLogins());
         assertEquals("sub-alice", User.getById(EMAIL, false).getProperty(GoogleAccountProperty.class).getSubject());
 
         // The original account still gets in.
@@ -321,6 +368,115 @@ public class GoogleLoginFlowTest {
     }
 
     @Test
+    public void apiTokenOfGoogleUserCarriesGroupsUntilMaxAge() throws Exception {
+        TestRealm realm = new TestRealm();
+        AtomicLong now = new AtomicLong(TimeUnit.DAYS.toMillis(1000));
+        realm.setClock(now::get);
+        j.jenkins.setSecurityRealm(realm);
+
+        JenkinsRule.WebClient wc = rawClient();
+        assertEquals(302, finishLogin(wc, commenceAndGetState(wc, "")).getWebResponse().getStatusCode());
+        String token = User.getById(EMAIL, false).getProperty(ApiTokenProperty.class)
+                .generateNewToken("ci").plainValue;
+
+        // A Google-only user (no password) authenticates with the token over HTTP basic auth.
+        JenkinsRule.WebClient api = rawClient().withBasicCredentials(EMAIL, token);
+        String whoami = whoAmI(api);
+        assertTrue(whoami.contains("\"" + EMAIL + "\""));
+        assertTrue(whoami.contains(GROUP), "group authority from the last Google login");
+
+        now.addAndGet(TimeUnit.DAYS.toMillis(7) + 1);
+        whoami = whoAmI(api);
+        assertTrue(whoami.contains("\"" + EMAIL + "\""), "token still authenticates");
+        assertFalse(whoami.contains(GROUP), "group authority must expire");
+    }
+
+    @Test
+    public void oauthServiceIsReusedAcrossLogins() throws Exception {
+        TestRealm realm = new TestRealm();
+        j.jenkins.setSecurityRealm(realm);
+        for (int i = 0; i < 2; i++) {
+            JenkinsRule.WebClient wc = rawClient();
+            assertEquals(302, finishLogin(wc, commenceAndGetState(wc, "")).getWebResponse().getStatusCode());
+        }
+        assertEquals(1, realm.oauthServicesCreated, "the ID token verifier keeps Google's keys cached");
+    }
+
+    @Test
+    public void transportConnectsThroughJenkinsProxy() throws Exception {
+        try (ServerSocket proxy = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            j.jenkins.setProxy(new ProxyConfiguration("127.0.0.1", proxy.getLocalPort()));
+            CompletableFuture<String> requestLine = CompletableFuture.supplyAsync(() -> {
+                try (Socket socket = proxy.accept()) {
+                    BufferedReader in = new BufferedReader(
+                            new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+                    String first = in.readLine();
+                    String header;
+                    do {
+                        header = in.readLine();
+                    } while (header != null && !header.isEmpty());
+                    OutputStream out = socket.getOutputStream();
+                    out.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                            .getBytes(StandardCharsets.US_ASCII));
+                    out.flush();
+                    return first;
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+            com.google.api.client.http.HttpResponse response = GoogleGroupsSecurityRealm.createTransport()
+                    .createRequestFactory()
+                    .buildGetRequest(new GenericUrl("http://google.invalid/probe"))
+                    .execute();
+            assertEquals("ok", response.parseAsString());
+            assertEquals("GET http://google.invalid/probe HTTP/1.1", requestLine.get(30, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void clientIdHelpShowsRedirectUriToRegister() throws Exception {
+        assertTrue(get(rawClient(), HELP + "/clientId").getWebResponse().getContentAsString()
+                .contains(j.getURL() + "securityRealm/finishLogin"));
+
+        JenkinsLocationConfiguration.get().setUrl(null);
+        assertTrue(get(rawClient(), HELP + "/clientId").getWebResponse().getContentAsString()
+                .contains("Set the Jenkins URL"));
+    }
+
+    @Test
+    public void realmAndEveryFieldHaveHelp() throws Exception {
+        for (String field : List.of("", "/clientId", "/clientSecret", "/hostedDomain", "/groupIncludePattern",
+                "/groupAuthorityMaxAgeDays", "/onGroupLookupFailure")) {
+            Page help = get(rawClient(), HELP + field);
+            assertEquals(200, help.getWebResponse().getStatusCode(), "help" + field);
+            assertFalse(help.getWebResponse().getContentAsString().isBlank(), "help" + field);
+        }
+    }
+
+    @Test
+    public void securityConfigFormRoundTrips() throws Exception {
+        GoogleGroupsSecurityRealm realm = new GoogleGroupsSecurityRealm("client-id", null, "example.com");
+        realm.setGroupIncludePattern("^jenkins-.*$");
+        realm.setOnGroupLookupFailure(GroupLookupFailurePolicy.FAIL);
+        realm.setGroupAuthorityMaxAgeDays(3);
+        j.jenkins.setSecurityRealm(realm);
+
+        HtmlForm form = j.createWebClient().goTo("manage/configureSecurity").getFormByName("config");
+        HtmlSelect policy = form.getSelectByName("onGroupLookupFailure");
+        assertEquals(List.of("DEGRADE", "FAIL"),
+                policy.getOptions().stream().map(o -> o.getText().trim()).toList(), "option labels");
+        assertEquals("FAIL", policy.getSelectedOptions().get(0).getValueAttribute());
+        j.submit(form);
+
+        GoogleGroupsSecurityRealm saved = (GoogleGroupsSecurityRealm) j.jenkins.getSecurityRealm();
+        assertEquals("client-id", saved.getClientId());
+        assertEquals("example.com", saved.getHostedDomain());
+        assertEquals("^jenkins-.*$", saved.getGroupIncludePattern());
+        assertEquals(GroupLookupFailurePolicy.FAIL, saved.getOnGroupLookupFailure());
+        assertEquals(3, saved.getGroupAuthorityMaxAgeDays());
+    }
+
+    @Test
     public void incompleteConfigurationFailsLoginClearly() throws Exception {
         j.jenkins.setSecurityRealm(new GoogleGroupsSecurityRealm("", null, "example.com"));
         assertMisconfigured("Client ID");
@@ -356,9 +512,6 @@ public class GoogleLoginFlowTest {
                 j.jenkins.getDescriptorOrDie(GoogleGroupsSecurityRealm.class);
         assertNotNull(d.getDisplayName());
 
-        assertEquals(FormValidation.Kind.ERROR, d.doCheckClientId("").kind);
-        assertEquals(FormValidation.Kind.OK, d.doCheckClientId("client-id").kind);
-
         assertEquals(FormValidation.Kind.ERROR, d.doCheckHostedDomain("").kind);
         assertEquals(FormValidation.Kind.ERROR, d.doCheckHostedDomain("user@example.com").kind);
         assertEquals(FormValidation.Kind.ERROR, d.doCheckHostedDomain("example.com/path").kind);
@@ -374,8 +527,5 @@ public class GoogleLoginFlowTest {
         assertEquals(FormValidation.Kind.ERROR, d.doCheckGroupAuthorityMaxAgeDays("-1").kind);
         assertEquals(FormValidation.Kind.ERROR, d.doCheckGroupAuthorityMaxAgeDays("seven").kind);
         assertEquals(FormValidation.Kind.ERROR, d.doCheckGroupAuthorityMaxAgeDays("").kind);
-
-        ListBoxModel model = d.doFillOnGroupLookupFailureItems();
-        assertEquals(2, model.size());
     }
 }

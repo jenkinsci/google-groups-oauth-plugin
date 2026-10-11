@@ -43,7 +43,7 @@
     <!-- https://www.jenkins.io/doc/developer/plugin-development/choosing-jenkins-baseline/ -->
     <jenkins.baseline>2.555</jenkins.baseline>
     <jenkins.version>${jenkins.baseline}.3</jenkins.version>
-    <hpi.bundledArtifacts>commons-codec,error_prone_annotations,google-api-client,google-http-client,google-http-client-gson,google-oauth-client,grpc-api,grpc-context,opencensus-api,opencensus-contrib-http-util</hpi.bundledArtifacts>
+    <hpi.bundledArtifacts>google-api-client,google-http-client,google-http-client-gson,google-oauth-client,grpc-api,grpc-context,opencensus-api,opencensus-contrib-http-util</hpi.bundledArtifacts>
     <hpi.strictBundledArtifacts>true</hpi.strictBundledArtifacts>
     <banObsoleteDependencyOverrides.skip>false</banObsoleteDependencyOverrides.skip>
     <ban-junit4-imports.skip>false</ban-junit4-imports.skip>
@@ -53,12 +53,6 @@
 
   <dependencyManagement>
     <dependencies>
-      <!-- annotations-only; align google-api-client's requirement above the BOM-managed version -->
-      <dependency>
-        <groupId>com.google.errorprone</groupId>
-        <artifactId>error_prone_annotations</artifactId>
-        <version>2.36.0</version>
-      </dependency>
       <dependency>
         <groupId>io.jenkins.tools.bom</groupId>
         <artifactId>bom-${jenkins.baseline}.x</artifactId>
@@ -106,8 +100,8 @@
         <!-- unused here: only the code-flow/ID-token classes and NetHttpTransport+gson are
              used, so the Apache HTTP transport stack, the auth-library used by the generated
              service clients, and annotation-only jars need not be bundled into the .hpi.
-             commons-codec stays: google-http-client's Base64 (ID-token parsing) delegates to
-             it; opencensus/grpc stay: referenced unconditionally by google-http-client. -->
+             commons-codec is provided by Jenkins core. opencensus/grpc stay: referenced
+             unconditionally by google-http-client. -->
         <exclusion>
           <groupId>com.google.auth</groupId>
           <artifactId>google-auth-library-credentials</artifactId>
@@ -127,6 +121,14 @@
         <exclusion>
           <groupId>org.apache.httpcomponents</groupId>
           <artifactId>httpcore</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>commons-codec</groupId>
+          <artifactId>commons-codec</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.google.errorprone</groupId>
+          <artifactId>error_prone_annotations</artifactId>
         </exclusion>
         <exclusion>
           <groupId>com.google.j2objc</groupId>

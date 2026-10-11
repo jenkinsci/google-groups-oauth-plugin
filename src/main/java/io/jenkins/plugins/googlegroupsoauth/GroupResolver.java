@@ -3,6 +3,8 @@ package io.jenkins.plugins.googlegroupsoauth;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.IOException;
 import java.util.List;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
  * Resolves the Google Groups a user belongs to.
@@ -12,6 +14,7 @@ import java.util.List;
  * realm. The v1 implementation is {@link CloudIdentityDirectGroupResolver}, which uses the
  * logged-in user's own OAuth access token.
  */
+@Restricted(NoExternalUse.class)
 public interface GroupResolver {
 
     /**

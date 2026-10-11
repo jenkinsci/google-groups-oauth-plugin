@@ -1,25 +1,21 @@
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form">
   <f:entry title="${%Client ID}" field="clientId">
-    <f:textbox/>
+    <f:textbox clazz="required" checkMessage="${%Client ID is required}"/>
   </f:entry>
   <f:entry title="${%Client secret}" field="clientSecret">
     <f:password/>
   </f:entry>
-  <f:entry title="${%Hosted domain}" field="hostedDomain"
-           description="Required. Logins are rejected unless the Google ID token hd claim equals this domain, e.g. example.com">
+  <f:entry title="${%Hosted domain}" field="hostedDomain">
     <f:textbox/>
   </f:entry>
-  <f:entry title="${%Group include pattern}" field="groupIncludePattern"
-           description="Optional regular expression; only matching group emails become authorities. Empty = include all groups.">
+  <f:entry title="${%Group include pattern}" field="groupIncludePattern">
     <f:textbox/>
   </f:entry>
-  <f:entry title="${%Group authority max age (days)}" field="groupAuthorityMaxAgeDays"
-           description="API-token requests keep the Google Group authorities from the user's last Google login for this many days, then get only 'authenticated' until the user signs in again. 0 = never expire (not recommended).">
+  <f:entry title="${%Group authority max age (days)}" field="groupAuthorityMaxAgeDays">
     <f:number clazz="non-negative-number-required" min="0" default="7"/>
   </f:entry>
-  <f:entry title="${%On group lookup failure}" field="onGroupLookupFailure"
-           description="DEGRADE: log in with only the authenticated authority and log a warning. FAIL: refuse the login.">
-    <f:select/>
+  <f:entry title="${%On group lookup failure}" field="onGroupLookupFailure">
+    <f:enum>${it.name()}</f:enum>
   </f:entry>
 </j:jelly>

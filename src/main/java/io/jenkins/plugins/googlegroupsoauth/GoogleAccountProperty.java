@@ -6,6 +6,8 @@ import hudson.model.User;
 import hudson.model.UserProperty;
 import hudson.model.UserPropertyDescriptor;
 import net.sf.json.JSONObject;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.stapler.StaplerRequest2;
 
 /**
@@ -23,6 +25,7 @@ import org.kohsuke.stapler.StaplerRequest2;
  *       {@link GoogleGroupsSecurityRealm#getGroupAuthorityMaxAgeDays()}).</li>
  * </ul>
  */
+@Restricted(NoExternalUse.class)
 public class GoogleAccountProperty extends UserProperty {
 
     private final String subject;

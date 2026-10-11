@@ -4,8 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import hudson.security.FullControlOnceLoggedInAuthorizationStrategy;
 import hudson.security.HudsonPrivateSecurityRealm;
+import java.net.URL;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.htmlunit.FailingHttpStatusCodeException;
+import org.htmlunit.Page;
 import org.htmlunit.html.HtmlPage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,17 +71,21 @@ public class HybridLoginTest {
     }
 
     @Test
-    public void whoamiIsReachableAnonymouslyAndWhenLoggedIn() throws Exception {
-        JenkinsRule.WebClient anonymous = j.createWebClient();
-        String anonContent = anonymous.goTo("securityRealm/whoami")
-                .getWebResponse().getContentAsString();
-        assertTrue(anonContent.contains("not logged in"));
+    public void googleButtonRendersSymbolAndStylesheetWithoutOverallRead() throws Exception {
+        FullControlOnceLoggedInAuthorizationStrategy strategy = new FullControlOnceLoggedInAuthorizationStrategy();
+        strategy.setAllowAnonymousRead(false);
+        j.jenkins.setAuthorizationStrategy(strategy);
 
         JenkinsRule.WebClient wc = j.createWebClient();
-        wc.login("qaautomation", "hunter2");
-        String content = wc.goTo("securityRealm/whoami").getWebResponse().getContentAsString();
-        assertTrue(content.contains("qaautomation"));
-        assertTrue(content.contains("authenticated"));
+        String content = wc.goTo("login").getWebResponse().getContentAsString();
+        assertTrue(content.contains("fill=\"#4285F4\""), "Google symbol should be rendered inline");
+        Matcher stylesheet = Pattern.compile("href=['\"]([^'\"]*/login-button\\.css)['\"]").matcher(content);
+        assertTrue(stylesheet.find(), "button stylesheet should be linked");
+
+        // The login page is shown to people who cannot read anything else yet.
+        Page css = wc.getPage(new URL(j.getURL(), stylesheet.group(1)));
+        assertEquals(200, css.getWebResponse().getStatusCode());
+        assertTrue(css.getWebResponse().getContentAsString().contains(".google-groups-oauth-login"));
     }
 
     @Test

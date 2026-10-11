@@ -1,0 +1,9 @@
+<div>
+  What to do when the Google Groups lookup fails during login:
+  <ul>
+    <li><code>DEGRADE</code>: sign the user in with only the <code>authenticated</code> authority
+      and log a warning. Their group permissions return at the next successful login.</li>
+    <li><code>FAIL</code>: refuse the login.</li>
+  </ul>
+  A failed lookup is never treated as "member of no groups".
+</div>

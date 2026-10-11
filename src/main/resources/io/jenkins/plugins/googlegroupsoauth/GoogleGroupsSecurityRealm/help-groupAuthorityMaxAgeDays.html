@@ -1,0 +1,13 @@
+<div>
+  <p>
+    How many days the Google Group authorities recorded at a user's last Google login stay valid
+    for requests made with that user's API tokens. Jenkins does not check Google between logins,
+    so this limits how long someone removed from a group, or from the Workspace, keeps that
+    group's permissions through their API tokens.
+  </p>
+  <p>
+    After this many days, API-token requests get only the <code>authenticated</code> authority
+    until the user signs in with Google again. <code>0</code> means never expire, which is not
+    recommended. Browser sessions are not affected, and neither are local users.
+  </p>
+</div>

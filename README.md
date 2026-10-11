@@ -59,8 +59,8 @@ Offboard them           ->  remove them from the group. Applies at their next lo
   previous owner's API tokens, credentials or permissions.
 - **Configuration as Code:** first-class [JCasC](https://plugins.jenkins.io/configuration-as-code/)
   support, including env-var interpolation for every field.
-- **`/securityRealm/whoami`:** a self-service debug page showing exactly which
-  authorities were resolved at login.
+- **Login logging:** every Google login logs the full list of resolved authorities,
+  and Jenkins' built-in `/whoAmI` page shows them to the user.
 
 ## How it works
 
@@ -106,21 +106,20 @@ sequenceDiagram
 | Google Workspace / Cloud Identity | any edition (premium **not** required) |
 | GCP project | with the **Cloud Identity API** enabled |
 | Jenkins URL | must be configured in *Manage Jenkins → System* (used to build the OAuth redirect URI; Google login is refused without it) |
+| Outbound HTTPS | from the controller to `oauth2.googleapis.com`, `www.googleapis.com` and `cloudidentity.googleapis.com`, directly or through the HTTP proxy configured in *Manage Jenkins → System* |
 
 ## Installation
 
-### Option A: install the `.hpi` via the UI
+### Option A: plugin manager
 
-1. Download `google-groups-oauth.hpi` from the releases page (or build it, see
-   [Building from source](#building-from-source)).
-2. In Jenkins: **Manage Jenkins → Plugins → Advanced settings → Deploy Plugin**,
-   choose the `.hpi`, deploy, and restart Jenkins.
+In Jenkins, open **Manage Jenkins → Plugins → Available plugins**, search for
+*Google Groups OAuth*, install it and restart Jenkins.
 
 ### Option B: bake into a custom controller image (recommended for Kubernetes)
 
 ```dockerfile
 FROM jenkins/jenkins:2.555.3-jdk21
-COPY google-groups-oauth.hpi /usr/share/jenkins/ref/plugins/google-groups-oauth.jpi
+RUN jenkins-plugin-cli --plugins google-groups-oauth
 ```
 
 > [!IMPORTANT]
@@ -274,9 +273,11 @@ immediately, because Jenkins only talks to Google when that person signs in:
 | Existing browser session | When the session ends (Jenkins session timeout) |
 | API tokens | After `groupAuthorityMaxAgeDays` without a Google login (default 7 days) |
 
-For immediate removal (for example, a departing administrator), also **delete the
-person's Jenkins user** (*Manage Jenkins → Users*). That revokes their API tokens and
-ends their access at once.
+For immediate removal (for example, a departing administrator), open the person's
+Jenkins user page at `https://<your-jenkins-url>/user/<email>/`:
+
+- Under **Security**, terminate their active sessions.
+- Then **Delete** the user. That revokes their API tokens and ends their access at once.
 
 ### Email address reuse
 
@@ -306,11 +307,11 @@ The standard Jenkins login page shows **both** options:
 ## Troubleshooting
 
 **A user's permissions are missing.**
-Ask them to open `https://<your-jenkins-url>/securityRealm/whoami`: it lists the
-authorities resolved at their login and is deliberately reachable without Overall/Read
+Ask them to open `https://<your-jenkins-url>/whoAmI/`: this built-in Jenkins page
+lists the authorities resolved at their login and is reachable without Overall/Read
 (a user whose groups were all filtered may have no permissions at all).
 
-**A group is missing from whoami.** In order of likelihood:
+**A group is missing from `/whoAmI`.** In order of likelihood:
 
 1. The user is a **nested** member (via a sub-group); only direct memberships
    resolve. Add them directly.
@@ -342,7 +343,7 @@ Google login: alice@your-domain.com authorities=[authenticated, jenkins-qa@your-
   Cloud Identity API with the user's own token. Revisit only with premium Workspace
   licensing (`searchTransitiveGroups`).
 - **Silent group filtering** by Google (visibility settings) cannot be detected
-  server-side in user-token mode; mitigated by login logging and `whoami`.
+  server-side in user-token mode; mitigated by login logging and `/whoAmI`.
 - **No background authority refresh:** changes apply at next login (and to API tokens
   within `groupAuthorityMaxAgeDays`); see [Offboarding](#offboarding).
 - The realm is intentionally designed so a **service-account resolver mode** (Cloud
@@ -371,7 +372,6 @@ src/main/java/io/jenkins/plugins/googlegroupsoauth/
   CloudIdentityDirectGroupResolver.java   # searchDirectGroups + pagination + filter
   GoogleFederatedLoginService.java        # "Sign in with Google" button on the login page
   GoogleUserInfo.java                     # profile claims -> Jenkins user record
-  WhoAmIAction.java                       # /securityRealm/whoami debug page
 ```
 
 ## License

@@ -1,0 +1,23 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core">
+  <!-- help views are not rendered with the descriptor as "it" -->
+  <j:set var="redirectUri" value="${app.getDescriptor('io.jenkins.plugins.googlegroupsoauth.GoogleGroupsSecurityRealm').redirectUri}"/>
+  <div>
+    <p>
+      The client ID of a Google Cloud OAuth client of type <em>Web application</em>, for example
+      <code>1234567890-abc.apps.googleusercontent.com</code>.
+    </p>
+    <j:choose>
+      <j:when test="${redirectUri != null}">
+        <p>Add this URI to the client's <em>Authorized redirect URIs</em>:</p>
+        <pre>${redirectUri}</pre>
+      </j:when>
+      <j:otherwise>
+        <p>
+          Set the Jenkins URL under <em>Manage Jenkins &gt; System</em> first: the client's authorized
+          redirect URI is that URL followed by <code>securityRealm/finishLogin</code>.
+        </p>
+      </j:otherwise>
+    </j:choose>
+  </div>
+</j:jelly>

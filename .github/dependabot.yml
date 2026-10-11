@@ -1,7 +1,7 @@
 version: 2
 updates:
   # Parent POM, plugin BOM, google-api-client and test dependencies. Bundled libraries
-  # (google-*, grpc, opencensus, commons-codec) ship inside the .hpi, so their CVEs are ours.
+  # (google-*, grpc, opencensus) ship inside the .hpi, so their CVEs are ours.
   - package-ecosystem: maven
     directory: /
     schedule:
