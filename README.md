@@ -262,6 +262,31 @@ Behavior notes:
   persists until that user's session ends and they log in again, and in their API
   tokens for up to `groupAuthorityMaxAgeDays`.
 
+### API tokens
+
+Jenkins API tokens work for every user, including people who only ever sign in with
+Google. Jenkins does not ask Google about group memberships between logins, so a token
+request carries the Google Group authorities from its owner's **most recent Google
+login**, and only for a limited time:
+
+- For `groupAuthorityMaxAgeDays` days after that login (default 7), token requests have
+  the owner's Google Group authorities.
+- After that, token requests carry only `authenticated`. The token still authenticates,
+  but anything granted through a Google Group is refused (typically HTTP 403) until the
+  owner signs in with Google again, which renews the groups for another
+  `groupAuthorityMaxAgeDays` days.
+- Permissions granted to the user directly (`user:` entries) are not affected.
+
+This is what makes offboarding work for tokens: someone removed from a group, or from
+the Workspace, loses that group's permissions within `groupAuthorityMaxAgeDays` even if
+they never sign in again.
+
+For long-running automation (CI scripts, bots, integrations), do not rely on Google
+Group authorities. Grant the automation account its permissions with `user:` entries,
+as in [Step 4](#step-4-bind-roles-to-groups). Setting `groupAuthorityMaxAgeDays` to `0`
+disables the expiry, but then people removed from a group keep its permissions through
+their tokens indefinitely.
+
 ### Offboarding
 
 Removing someone from a Google Group (or from the Workspace) does not reach Jenkins
@@ -271,7 +296,7 @@ immediately, because Jenkins only talks to Google when that person signs in:
 |---|---|
 | New Google login | Immediately (the group is gone, or the login fails) |
 | Existing browser session | When the session ends (Jenkins session timeout) |
-| API tokens | After `groupAuthorityMaxAgeDays` without a Google login (default 7 days) |
+| API tokens | After `groupAuthorityMaxAgeDays` without a Google login (default 7 days; see [API tokens](#api-tokens)) |
 
 For immediate removal (for example, a departing administrator), open the person's
 Jenkins user page at `https://<your-jenkins-url>/user/<email>/`:
